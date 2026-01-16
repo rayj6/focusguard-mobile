@@ -17,8 +17,10 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL;
 
@@ -36,6 +38,8 @@ const Colors = {
   surfacePro: "#111827",
 };
 
+const STORAGE_KEY = "@GFOCUS_DISTRACTION_HISTORY";
+
 export default function App() {
   // --- States ---
   const [code, setCode] = useState("");
@@ -51,6 +55,7 @@ export default function App() {
   const [newDeviceCode, setNewDeviceCode] = useState("");
   const [isActivating, setIsActivating] = useState(false);
   const [licenseInput, setLicenseInput] = useState("");
+  const [proofUrl, setProofUrl] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"DASHBOARD" | "MONITOR">(
     "DASHBOARD"
   );
@@ -59,31 +64,118 @@ export default function App() {
     { id: "2", code: "Z1XS4J", name: "Travel MacBook" },
   ]);
 
-  const sessionRef = useRef(0);
+  // --- Logic Refs ---
+  const distractionCounter = useRef(0);
+  const getRoomStorageKey = (roomCode: string) => `@GFOCUS_HISTORY_${roomCode}`;
 
-  // --- Effects ---
+  useEffect(() => {
+    if (isPaired && code) {
+      loadRoomHistory(code);
+    }
+  }, [isPaired, code]);
+
+  const loadRoomHistory = async (roomCode: string) => {
+    try {
+      const savedData = await AsyncStorage.getItem(getRoomStorageKey(roomCode));
+      if (savedData) {
+        let parsed = JSON.parse(savedData);
+        // Delete logs older than 24 hours
+        const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+        const filtered = parsed.filter((item: any) => item.id > oneDayAgo);
+        setHistory(filtered);
+      } else {
+        setHistory([]); // Reset for new room
+      }
+    } catch (e) {
+      console.error("Load Error:", e);
+    }
+  };
+
+  // 2. Robust Base64 Conversion (Ensures images display)
+  const getBase64 = async (url: string): Promise<string | null> => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // 3. Save to Room-Specific Storage
+  const saveDistraction = async (data: any, roomCode: string) => {
+    try {
+      const liveUrl = `${SERVER_URL}/proofs/proof_${roomCode}.jpg?t=${Date.now()}`;
+      const base64Data = await getBase64(liveUrl);
+
+      if (!base64Data) return;
+
+      const newEntry = {
+        id: Date.now(),
+        timestamp: new Date().toLocaleTimeString(),
+        reason: data.reason || "Distraction",
+        image_data: base64Data, // Stores actual image bits
+      };
+
+      const updatedHistory = [newEntry, ...history].slice(0, 20);
+      setHistory(updatedHistory);
+
+      // Save to room-specific key
+      await AsyncStorage.setItem(
+        getRoomStorageKey(roomCode),
+        JSON.stringify(updatedHistory)
+      );
+      Vibration.vibrate(500);
+    } catch (e) {
+      console.error("Save Error:", e);
+    }
+  };
+
+  // 4. Monitoring Loop
   useEffect(() => {
     if (!isPaired || !code) return;
-    const interval = setInterval(async () => {
+
+    const interval = window.setInterval(async () => {
       try {
         const res = await fetch(`${SERVER_URL}/status/${code}`);
         const data = await res.json();
 
-        if (data.session_id && data.session_id !== sessionRef.current) {
-          sessionRef.current = data.session_id;
-          if (data.status === "FOCUSING") {
-            Vibration.vibrate([0, 500, 100, 500]);
+        setStatus(data.status);
+
+        // If the room ended (IDLE), sync the final time exactly
+        if (data.status === "IDLE") {
+          setSeconds(data.seconds);
+        } else {
+          // Normal running drift correction
+          if (Math.abs(data.seconds - seconds) > 2) {
+            setSeconds(data.seconds);
           }
         }
-        setStatus(data.status || "IDLE");
-        setSeconds(data.seconds || 0);
-        if (data.history) setHistory(Object.values(data.history).reverse());
-      } catch (e) {
-        console.error("Sync error:", e);
-      }
+
+        setProofUrl(
+          data.image_url ? `${data.image_url}?t=${Date.now()}` : null
+        );
+
+        // Distraction saving logic...
+        if (data.status === "DISTRACTED") {
+          distractionCounter.current += 1;
+          if (distractionCounter.current >= 5) {
+            await saveDistraction(data, code);
+            distractionCounter.current = 0;
+          }
+        } else {
+          distractionCounter.current = 0;
+        }
+      } catch (e) {}
     }, 2000);
-    return () => clearInterval(interval);
-  }, [isPaired, code]);
+
+    return () => window.clearInterval(interval);
+  }, [isPaired, code, seconds, status]); // 'seconds' must be a dependency to calculate the difference
 
   // --- Handlers ---
   const handlePair = () => {
@@ -134,12 +226,28 @@ export default function App() {
   };
 
   const formatTime = (totalSeconds: number) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs
-      .toString()
-      .padStart(2, "0")}`;
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+
+    const pad = (n: number) => (n < 10 ? `0${n}` : n);
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
   };
+
+  useEffect(() => {
+    let ticker: any;
+
+    // The timer ONLY ticks if paired and the status is active
+    if (isPaired && status !== "IDLE" && status !== "OFFLINE") {
+      ticker = window.setInterval(() => {
+        setSeconds((prev) => prev + 1);
+      }, 1000);
+    }
+
+    return () => {
+      if (ticker) window.clearInterval(ticker);
+    };
+  }, [isPaired, status]); // Ticker restarts/stops based on status change // Re-runs whenever status changes
 
   // --- UI Layouts ---
 
@@ -403,7 +511,7 @@ export default function App() {
               styles.statusDot,
               {
                 backgroundColor:
-                  status === "FOCUSING" ? Colors.success : Colors.textMuted,
+                  status === "FOCUSING" ? Colors.success : Colors.danger,
               },
             ]}
           />
@@ -426,59 +534,60 @@ export default function App() {
         </View>
       </View>
 
-      <View style={styles.historySection}>
-        <Text style={[styles.historyTitle, isPro && { color: Colors.gold }]}>
-          Activity Log
-        </Text>
-        <ScrollView style={styles.historyScroll}>
-          {history.map((item: any, idx) => (
-            <View
-              key={idx}
-              style={[
-                styles.historyCard,
-                isPro && {
-                  backgroundColor: Colors.surfacePro,
-                  borderColor: Colors.gold + "20",
-                  borderWidth: 1,
-                },
-              ]}
-            >
-              <View style={styles.historyCardLeft}>
-                <Ionicons
-                  name="time-outline"
-                  size={20}
-                  color={isPro ? Colors.gold : Colors.accent}
-                />
-                <View>
-                  <Text
-                    style={[
-                      styles.historyDate,
-                      isPro && { color: Colors.goldLight },
-                    ]}
-                  >
-                    {item.end_time}
-                  </Text>
-                  <Text style={styles.historyDuration}>
-                    Time: {formatTime(item.duration)}
-                  </Text>
+      <ScrollView style={{ flex: 1 }}>
+        {/* --- LIVE PROOF (LIVE MONITORING) --- */}
+        {status === "DISTRACTED" && proofUrl && (
+          <View style={styles.proofContainer}>
+            <View style={styles.proofHeader}>
+              <Ionicons name="eye" size={16} color={Colors.danger} />
+              <Text style={styles.proofTitle}>LIVE NEURAL EVIDENCE</Text>
+            </View>
+            <Image
+              source={{ uri: proofUrl }}
+              style={styles.proofImage}
+              resizeMode="cover"
+            />
+            <Text style={styles.proofFooter}>
+              AI Engine currently detecting non-focus activity.
+            </Text>
+          </View>
+        )}
+
+        {/* Distraction History Section */}
+        <View style={styles.historySection}>
+          <Text style={styles.historyTitle}>DISTRACTION HISTORY</Text>
+          {history.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No distraction incidents recorded.
+            </Text>
+          ) : (
+            history.map((item) => (
+              <View key={item.id} style={styles.historyCard}>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.historyCardLeft}>
+                    <Ionicons name="warning" size={18} color={Colors.danger} />
+                    <View>
+                      <Text style={styles.historyDate}>{item.timestamp}</Text>
+                      <Text style={styles.historyDuration}>{item.reason}</Text>
+                    </View>
+                  </View>
+
+                  {/* DISPLAY STORED BASE64 IMAGE */}
+                  {item.image_data && (
+                    <View style={styles.historyImageContainer}>
+                      <Image
+                        source={{ uri: item.image_data }}
+                        style={styles.historyProofImage}
+                        resizeMode="cover"
+                      />
+                    </View>
+                  )}
                 </View>
               </View>
-              <View
-                style={[
-                  styles.historyPoints,
-                  isPro && { backgroundColor: Colors.gold + "20" },
-                ]}
-              >
-                <Text
-                  style={[styles.pointsText, isPro && { color: Colors.gold }]}
-                >
-                  +{Math.floor(item.duration / 60)}
-                </Text>
-              </View>
-            </View>
-          ))}
-        </ScrollView>
-      </View>
+            ))
+          )}
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -702,7 +811,7 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 12, fontWeight: "700" },
   timerContainer: { alignItems: "center" },
-  timerText: { fontSize: 72, fontWeight: "800", color: Colors.text },
+  timerText: { fontSize: 50, fontWeight: "800", color: Colors.text },
   timerLabel: {
     fontSize: 12,
     color: Colors.textMuted,
@@ -736,4 +845,89 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   pointsText: { fontSize: 12, fontWeight: "700", color: Colors.accent },
+  historyImageContainer: {
+    marginTop: 12,
+    borderRadius: 8,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: Colors.danger + "40",
+    backgroundColor: "#000",
+  },
+  historyProofImage: {
+    width: "100%",
+    height: 150,
+    opacity: 0.8,
+  },
+  imageOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    padding: 4,
+  },
+  overlayText: {
+    color: Colors.danger,
+    fontSize: 8,
+    fontWeight: "800",
+    textAlign: "center",
+    letterSpacing: 1,
+  },
+
+  proofImage: {
+    width: "100%",
+    height: 200,
+    borderRadius: 12,
+    marginTop: 10,
+  },
+
+  proofContainer: {
+    marginHorizontal: 20,
+    backgroundColor: "#000",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.danger,
+    padding: 12,
+    marginBottom: 30,
+  },
+  proofHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  proofTitle: {
+    color: Colors.danger,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 2,
+  },
+  proofFooter: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    marginTop: 8,
+    fontStyle: "italic",
+    textAlign: "center",
+  },
+  imageTimestampBadge: {
+    position: "absolute",
+    bottom: 8,
+    right: 8,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  imageTimestampText: {
+    color: Colors.danger,
+    fontSize: 10,
+    fontWeight: "bold",
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+  },
+  emptyText: {
+    color: Colors.textMuted,
+    textAlign: "center",
+    marginTop: 20,
+    fontStyle: "italic",
+  },
 });
