@@ -18,6 +18,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -64,9 +65,27 @@ export default function App() {
     { id: "2", code: "Z1XS4J", name: "Travel MacBook" },
   ]);
 
+  const [showGuide, setShowGuide] = useState(false);
+  const ONBOARDING_KEY = "@GFOCUS_GUIDE_SEEN";
+
+  const LICENSE_STORAGE_KEY = "@GFOCUS_LICENSE_KEY";
+
   // --- Logic Refs ---
   const distractionCounter = useRef(0);
   const getRoomStorageKey = (roomCode: string) => `@GFOCUS_HISTORY_${roomCode}`;
+
+  useEffect(() => {
+    const checkFirstTime = async () => {
+      const seen = await AsyncStorage.getItem(ONBOARDING_KEY);
+      if (!seen) setShowGuide(true);
+    };
+    checkFirstTime();
+  }, []);
+
+  const completeGuide = async () => {
+    await AsyncStorage.setItem(ONBOARDING_KEY, "true");
+    setShowGuide(false);
+  };
 
   useEffect(() => {
     if (isPaired && code) {
@@ -175,7 +194,36 @@ export default function App() {
     }, 2000);
 
     return () => window.clearInterval(interval);
-  }, [isPaired, code, seconds, status]); // 'seconds' must be a dependency to calculate the difference
+  }, [isPaired, code, seconds, status]);
+
+  useEffect(() => {
+    const checkStoredLicense = async () => {
+      try {
+        const storedKey = await AsyncStorage.getItem(LICENSE_STORAGE_KEY);
+        if (storedKey) {
+          // Optional: Re-verify with server to ensure it wasn't revoked
+          const response = await fetch(`${SERVER_URL}/verify_license`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ license_key: storedKey }),
+          });
+
+          const data = await response.json();
+          if (response.ok && data.valid) {
+            setIsPro(true);
+            setLicenseInput(storedKey);
+          } else {
+            // If key is no longer valid, remove it
+            await AsyncStorage.removeItem(LICENSE_STORAGE_KEY);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to restore license", e);
+      }
+    };
+
+    checkStoredLicense();
+  }, []);
 
   // --- Handlers ---
   const handlePair = () => {
@@ -186,16 +234,46 @@ export default function App() {
     }
   };
 
-  const handleActivatePro = () => {
+  const handleActivatePro = async () => {
+    if (!licenseInput.trim()) return;
+
     setIsActivating(true);
     Vibration.vibrate(50);
-    setTimeout(() => {
+
+    try {
+      const response = await fetch(`${SERVER_URL}/verify_license`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ license_key: licenseInput.trim() }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.valid) {
+        // 1. Persist the key locally so it survives app restarts
+        await AsyncStorage.setItem(LICENSE_STORAGE_KEY, licenseInput.trim());
+
+        // 2. Update state
+        setIsPro(true);
+        setShowLicenseEntry(false);
+        setIsPaired(true); // Auto-pair if they just activated
+
+        Vibration.vibrate([0, 100, 50, 100]);
+        Alert.alert("Success", `Pro Activated: ${data.tier} Tier`);
+      } else {
+        Alert.alert(
+          "Invalid License",
+          "The license key provided is incorrect or unpaid."
+        );
+      }
+    } catch (error) {
+      Alert.alert(
+        "Connection Error",
+        "Could not reach the verification server."
+      );
+    } finally {
       setIsActivating(false);
-      setIsPro(true);
-      setShowLicenseEntry(false);
-      setIsPaired(true);
-      Vibration.vibrate([0, 100, 50, 100]);
-    }, 1500);
+    }
   };
 
   const registerDevice = () => {
@@ -257,6 +335,7 @@ export default function App() {
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <SafeAreaView style={styles.container}>
           <StatusBar barStyle="light-content" />
+
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : "height"}
             style={styles.pairingContent}
@@ -312,34 +391,62 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
+            {/* --- LICENSE ENTRY MODAL/VIEW --- */}
             {showLicenseEntry && (
-              <View style={styles.proOverlay}>
-                <View style={styles.proModal}>
-                  <Ionicons name="medal" size={48} color={Colors.gold} />
-                  <Text style={styles.proModalTitle}>Activate Pro</Text>
+              <View style={styles.licenseOverlay}>
+                <View style={styles.licenseCard}>
+                  <View style={styles.licenseHeader}>
+                    <Ionicons name="flash" size={24} color={Colors.gold} />
+                    <Text style={styles.licenseTitle}>ACTIVATE PRO</Text>
+                  </View>
+
+                  <Text style={styles.licenseSubtitle}>
+                    Enter your license key to unlock Neural Evidence logs and
+                    Gold themes.
+                  </Text>
+
                   <TextInput
-                    style={styles.proInput}
-                    placeholder="LICENSE KEY"
-                    placeholderTextColor="#555"
+                    style={styles.licenseInput}
+                    placeholder="XXXX-XXXX-XXXX-XXXX"
+                    placeholderTextColor={Colors.textMuted}
                     value={licenseInput}
                     onChangeText={setLicenseInput}
                     autoCapitalize="characters"
                   />
+
                   <TouchableOpacity
-                    style={styles.proSubmitBtn}
+                    style={styles.activateButton}
                     onPress={handleActivatePro}
-                    disabled={isActivating || !licenseInput}
+                    disabled={isActivating}
                   >
                     {isActivating ? (
                       <ActivityIndicator color={Colors.navy} />
                     ) : (
-                      <Text style={styles.proSubmitText}>Verify</Text>
+                      <Text style={styles.activateButtonText}>VERIFY KEY</Text>
                     )}
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setShowLicenseEntry(false)}>
-                    <Text style={{ color: Colors.textMuted, marginTop: 20 }}>
-                      Cancel
+
+                  {/* --- NEW SECTION FOR USERS WITHOUT KEYS --- */}
+                  <View style={styles.buySection}>
+                    <Text style={styles.buyText}>
+                      Don't have a license key?
                     </Text>
+                    <TouchableOpacity
+                      onPress={() =>
+                        Linking.openURL("https://gfocus.scarlet-technology.com")
+                      }
+                    >
+                      <Text style={styles.buyLink}>
+                        Visit Website to get license key
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.closeLicense}
+                    onPress={() => setShowLicenseEntry(false)}
+                  >
+                    <Text style={styles.closeLicenseText}>CANCEL</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -461,12 +568,63 @@ export default function App() {
     );
   }
 
+  const OnboardingGuide = () => (
+    <View style={styles.guideOverlay}>
+      <View style={styles.guideCard}>
+        <Ionicons
+          name="rocket"
+          size={50}
+          color={Colors.accent}
+          style={{ alignSelf: "center" }}
+        />
+        <Text style={styles.guideHeader}>GETTING STARTED</Text>
+
+        <View style={styles.stepItem}>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepNumber}>1</Text>
+          </View>
+          <Text style={styles.stepText}>
+            Visit{" "}
+            <Text style={{ color: Colors.accent }}>
+              gfocus.scarlet-technology.com
+            </Text>
+          </Text>
+        </View>
+
+        <View style={styles.stepItem}>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepNumber}>2</Text>
+          </View>
+          <Text style={styles.stepText}>
+            Download & install the GFOCUS Engine (Windows or Mac).
+          </Text>
+        </View>
+
+        <View style={styles.stepItem}>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepNumber}>3</Text>
+          </View>
+          <Text style={styles.stepText}>
+            Enter the 6-digit room code generated by your desktop app here.
+          </Text>
+        </View>
+
+        <TouchableOpacity style={styles.guideButton} onPress={completeGuide}>
+          <Text style={styles.guideButtonText}>I'M READY</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   // 3. Monitor View (Used by both Pro and Free)
   return (
     <SafeAreaView
       style={[styles.container, isPro && { backgroundColor: Colors.navy }]}
     >
       <StatusBar barStyle="light-content" />
+
+      {showGuide && <OnboardingGuide />}
+
       <View style={styles.mainHeader}>
         <TouchableOpacity
           onPress={() =>
@@ -929,5 +1087,150 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 20,
     fontStyle: "italic",
+  },
+  guideOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(5, 11, 24, 0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1000,
+    padding: 30,
+  },
+  guideCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 24,
+    padding: 30,
+    width: "100%",
+    borderWidth: 1,
+    borderColor: Colors.accent + "40",
+  },
+  guideHeader: {
+    color: Colors.text,
+    fontSize: 22,
+    fontWeight: "900",
+    textAlign: "center",
+    marginVertical: 20,
+    letterSpacing: 2,
+  },
+  stepItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 25,
+    gap: 15,
+  },
+  stepBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.accent,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  stepNumber: {
+    color: Colors.navy,
+    fontWeight: "bold",
+  },
+  stepText: {
+    color: Colors.textMuted,
+    fontSize: 15,
+    flex: 1,
+    lineHeight: 22,
+  },
+  guideButton: {
+    backgroundColor: Colors.accent,
+    height: 55,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 10,
+  },
+  guideButtonText: {
+    color: Colors.navy,
+    fontWeight: "900",
+    fontSize: 16,
+  },
+  licenseOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.85)",
+    justifyContent: "center",
+    padding: 20,
+    zIndex: 2000,
+  },
+  licenseCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    padding: 25,
+    borderWidth: 1,
+    borderColor: Colors.gold + "40",
+  },
+  licenseHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
+  },
+  licenseTitle: {
+    color: Colors.gold,
+    fontSize: 20,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  licenseSubtitle: {
+    color: Colors.textMuted,
+    fontSize: 14,
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  licenseInput: {
+    backgroundColor: Colors.background,
+    borderRadius: 12,
+    height: 55,
+    color: "white",
+    paddingHorizontal: 15,
+    fontSize: 16,
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+    borderWidth: 1,
+    borderColor: Colors.surface,
+    marginBottom: 15,
+  },
+  activateButton: {
+    backgroundColor: Colors.gold,
+    height: 55,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  activateButtonText: {
+    color: Colors.navy,
+    fontWeight: "900",
+    fontSize: 16,
+  },
+  // --- New Styles ---
+  buySection: {
+    marginTop: 25,
+    alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: Colors.surface,
+    paddingTop: 20,
+  },
+  buyText: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    marginBottom: 5,
+  },
+  buyLink: {
+    color: Colors.accent,
+    fontWeight: "700",
+    fontSize: 14,
+    textDecorationLine: "underline",
+  },
+  closeLicense: {
+    marginTop: 20,
+    alignItems: "center",
+  },
+  closeLicenseText: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontWeight: "bold",
   },
 });
