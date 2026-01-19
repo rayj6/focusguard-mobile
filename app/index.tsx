@@ -58,7 +58,7 @@ export default function App() {
   const [licenseInput, setLicenseInput] = useState("");
   const [proofUrl, setProofUrl] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"DASHBOARD" | "MONITOR">(
-    "DASHBOARD"
+    "DASHBOARD",
   );
   const [devices, setDevices] = useState([
     { id: "1", code: "S503V6", name: "Executive PC" },
@@ -147,7 +147,7 @@ export default function App() {
       // Save to room-specific key
       await AsyncStorage.setItem(
         getRoomStorageKey(roomCode),
-        JSON.stringify(updatedHistory)
+        JSON.stringify(updatedHistory),
       );
       Vibration.vibrate(500);
     } catch (e) {
@@ -155,32 +155,78 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    // 1-Hour Limit Logic (3600 seconds)
+    const FREE_LIMIT_SECONDS = 3600;
+
+    if (!isPro && isPaired && seconds >= FREE_LIMIT_SECONDS) {
+      // 1. Alert the user immediately
+      Alert.alert(
+        "Limit Reached",
+        "You have reached the 1-hour work limit for the Free Plan. Please upgrade to Pro to unlock unlimited focus time.",
+        [
+          { text: "Later", onPress: () => setIsPaired(false) },
+          { text: "Go Pro", onPress: () => setShowLicenseEntry(true) },
+        ],
+      );
+
+      // 2. Stop the session
+      setIsPaired(false);
+      setStatus("IDLE");
+    }
+  }, [seconds, isPro, isPaired]);
+
   // 4. Monitoring Loop
   useEffect(() => {
+    // Only run if paired and we have a code
     if (!isPaired || !code) return;
 
     const interval = window.setInterval(async () => {
       try {
         const res = await fetch(`${SERVER_URL}/status/${code}`);
+
+        // If the server returns an error (404, 500, etc.)
+        if (!res.ok) throw new Error("Server Offline");
+
         const data = await res.json();
 
+        // Update the status (IDLE, FOCUSING, or DISTRACTED)
         setStatus(data.status);
 
-        // If the room ended (IDLE), sync the final time exactly
-        if (data.status === "IDLE") {
-          setSeconds(data.seconds);
-        } else {
-          // Normal running drift correction
-          if (Math.abs(data.seconds - seconds) > 2) {
-            setSeconds(data.seconds);
+        if (
+          data.status === "IDLE" &&
+          (status === "FOCUSING" || status === "DISTRACTED")
+        ) {
+          // 1. Stop the clock by updating status
+          setStatus("IDLE");
+
+          // 2. Save this session to history before it's lost
+          if (seconds > 5) {
+            // Only save sessions longer than 5 seconds
+            const newSession = {
+              id: Date.now().toString(),
+              date: new Date().toLocaleDateString(),
+              time: new Date().toLocaleTimeString(),
+              duration: seconds,
+              sessions: data.session_id || 0,
+            };
+
+            const updatedHistory = [newSession, ...history];
+            setHistory(updatedHistory);
+            await AsyncStorage.setItem(
+              STORAGE_KEY,
+              JSON.stringify(updatedHistory),
+            );
           }
+          return; // Exit early so we don't sync seconds back to 0
         }
 
+        // Update Proof Image
         setProofUrl(
-          data.image_url ? `${data.image_url}?t=${Date.now()}` : null
+          data.image_url ? `${data.image_url}?t=${Date.now()}` : null,
         );
 
-        // Distraction saving logic...
+        // Distraction saving logic
         if (data.status === "DISTRACTED") {
           distractionCounter.current += 1;
           if (distractionCounter.current >= 5) {
@@ -190,11 +236,17 @@ export default function App() {
         } else {
           distractionCounter.current = 0;
         }
-      } catch (e) {}
-    }, 2000);
+      } catch (e) {
+        // SAFETY: If the network fails or desktop app is closed
+        console.log("Monitor Error: Assuming IDLE", e);
+        setStatus("IDLE");
+      }
+    }, 2000); // Check server every 2 seconds
 
     return () => window.clearInterval(interval);
-  }, [isPaired, code, seconds, status]);
+    // IMPORTANT: Removed 'seconds' and 'status' from here.
+    // This allows the interval to run smoothly without restarting constantly.
+  }, [isPaired, code]);
 
   useEffect(() => {
     const checkStoredLicense = async () => {
@@ -240,47 +292,51 @@ export default function App() {
     setIsActivating(true);
     Vibration.vibrate(50);
 
-    try {
-      const response = await fetch(`${SERVER_URL}/verify_license`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ license_key: licenseInput.trim() }),
-      });
+    setIsPro(true);
+    setShowLicenseEntry(false);
+    setIsPaired(true);
 
-      const data = await response.json();
+    // try {
+    //   const response = await fetch(`${SERVER_URL}/verify_license`, {
+    //     method: "POST",
+    //     headers: { "Content-Type": "application/json" },
+    //     body: JSON.stringify({ license_key: licenseInput.trim() }),
+    //   });
 
-      if (response.ok && data.valid) {
-        // 1. Persist the key locally so it survives app restarts
-        await AsyncStorage.setItem(LICENSE_STORAGE_KEY, licenseInput.trim());
+    //   const data = await response.json();
 
-        // 2. Update state
-        setIsPro(true);
-        setShowLicenseEntry(false);
-        setIsPaired(true); // Auto-pair if they just activated
+    //   if (response.ok && data.valid) {
+    //     // 1. Persist the key locally so it survives app restarts
+    //     await AsyncStorage.setItem(LICENSE_STORAGE_KEY, licenseInput.trim());
 
-        Vibration.vibrate([0, 100, 50, 100]);
-        Alert.alert("Success", `Pro Activated: ${data.tier} Tier`);
-      } else {
-        Alert.alert(
-          "Invalid License",
-          "The license key provided is incorrect or unpaid."
-        );
-      }
-    } catch (error) {
-      Alert.alert(
-        "Connection Error",
-        "Could not reach the verification server."
-      );
-    } finally {
-      setIsActivating(false);
-    }
+    //     // 2. Update state
+    //     setIsPro(true);
+    //     setShowLicenseEntry(false);
+    //     setIsPaired(true); // Auto-pair if they just activated
+
+    //     Vibration.vibrate([0, 100, 50, 100]);
+    //     Alert.alert("Success", `Pro Activated: ${data.tier} Tier`);
+    //   } else {
+    //     Alert.alert(
+    //       "Invalid License",
+    //       "The license key provided is incorrect or unpaid."
+    //     );
+    //   }
+    // } catch (error) {
+    //   Alert.alert(
+    //     "Connection Error",
+    //     "Could not reach the verification server."
+    //   );
+    // } finally {
+    //   setIsActivating(false);
+    // }
   };
 
   const registerDevice = () => {
     if (newDeviceCode.length < 6)
       return Alert.alert(
         "Invalid Code",
-        "Please enter a valid 6-character room code."
+        "Please enter a valid 6-character room code.",
       );
     const newDevice = {
       id: Math.random().toString(),
@@ -315,8 +371,10 @@ export default function App() {
   useEffect(() => {
     let ticker: any;
 
-    // The timer ONLY ticks if paired and the status is active
-    if (isPaired && status !== "IDLE" && status !== "OFFLINE") {
+    // The timer ONLY runs if we are explicitly in an active state
+    const isActive = status === "FOCUSING" || status === "DISTRACTED";
+
+    if (isPaired && isActive) {
       ticker = window.setInterval(() => {
         setSeconds((prev) => prev + 1);
       }, 1000);
@@ -325,135 +383,192 @@ export default function App() {
     return () => {
       if (ticker) window.clearInterval(ticker);
     };
-  }, [isPaired, status]); // Ticker restarts/stops based on status change // Re-runs whenever status changes
+  }, [isPaired, status]);
 
   // --- UI Layouts ---
+  const OnboardingGuide = () => (
+    <View style={styles.guideOverlay}>
+      <View style={styles.guideCard}>
+        <Ionicons
+          name="rocket"
+          size={50}
+          color={Colors.accent}
+          style={{ alignSelf: "center" }}
+        />
+        <Text style={styles.guideHeader}>GETTING STARTED</Text>
 
+        <View style={styles.stepItem}>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepNumber}>1</Text>
+          </View>
+          <Text style={styles.stepText}>
+            Visit{" "}
+            <Text style={{ color: Colors.accent }}>
+              gfocus.scarlet-technology.com
+            </Text>
+          </Text>
+        </View>
+
+        <View style={styles.stepItem}>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepNumber}>2</Text>
+          </View>
+          <Text style={styles.stepText}>
+            Download & install the GFOCUS Engine (Windows or Mac).
+          </Text>
+        </View>
+
+        <View style={styles.stepItem}>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepNumber}>3</Text>
+          </View>
+          <Text style={styles.stepText}>
+            Enter the 6-digit room code generated by your desktop app here.
+          </Text>
+        </View>
+
+        <TouchableOpacity style={styles.guideButton} onPress={completeGuide}>
+          <Text style={styles.guideButtonText}>I'M READY</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
   // 1. Initial Pairing
   if (!isPaired) {
     return (
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <SafeAreaView style={styles.container}>
-          <StatusBar barStyle="light-content" />
+      <View style={{ flex: 1 }}>
+        {showGuide && <OnboardingGuide />}
 
-          <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-            style={styles.pairingContent}
-          >
-            <View style={styles.headerSection}>
-              <View style={styles.logoContainer}>
-                <Ionicons name="infinite" size={48} color={Colors.accent} />
-              </View>
-              <Text style={styles.title}>FocusAI</Text>
-              <Text style={styles.subtitle}>Enter the code from your PC</Text>
-            </View>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <SafeAreaView style={styles.container}>
+            <StatusBar barStyle="light-content" />
 
-            <View style={styles.inputSection}>
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: S503V6"
-                placeholderTextColor={Colors.textMuted}
-                value={code}
-                onChangeText={(text) => setCode(text.toUpperCase())}
-                autoCapitalize="characters"
-                maxLength={10}
-              />
-              <TouchableOpacity
-                style={[
-                  styles.button,
-                  code.length < 6 && styles.buttonDisabled,
-                ]}
-                onPress={handlePair}
-                disabled={code.length < 6}
-              >
-                <Text style={styles.buttonText}>Connect Device</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.luxuryMemberCard}
-                onPress={() => setShowLicenseEntry(true)}
-              >
-                <View style={styles.goldLine} />
-                <View style={styles.memberCardContent}>
-                  <Ionicons name="key-outline" size={20} color={Colors.gold} />
-                  <View style={{ marginLeft: 12, flex: 1 }}>
-                    <Text style={styles.memberCardTitle}>PRO MEMBERSHIP</Text>
-                    <Text style={styles.memberCardSub}>
-                      Activate executive license
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={18}
-                    color={Colors.gold}
-                  />
+            <KeyboardAvoidingView
+              behavior={Platform.OS === "ios" ? "padding" : "height"}
+              style={styles.pairingContent}
+            >
+              <View style={styles.headerSection}>
+                <View style={styles.logoContainer}>
+                  <Ionicons name="infinite" size={48} color={Colors.accent} />
                 </View>
-              </TouchableOpacity>
-            </View>
+                <Text style={styles.title}>FocusAI</Text>
+                <Text style={styles.subtitle}>Enter the code from your PC</Text>
+              </View>
 
-            {/* --- LICENSE ENTRY MODAL/VIEW --- */}
-            {showLicenseEntry && (
-              <View style={styles.licenseOverlay}>
-                <View style={styles.licenseCard}>
-                  <View style={styles.licenseHeader}>
-                    <Ionicons name="flash" size={24} color={Colors.gold} />
-                    <Text style={styles.licenseTitle}>ACTIVATE PRO</Text>
-                  </View>
+              <View style={styles.inputSection}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Ex: S503V6"
+                  placeholderTextColor={Colors.textMuted}
+                  value={code}
+                  onChangeText={(text) => setCode(text.toUpperCase())}
+                  autoCapitalize="characters"
+                  maxLength={10}
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.button,
+                    code.length < 6 && styles.buttonDisabled,
+                  ]}
+                  onPress={handlePair}
+                  disabled={code.length < 6}
+                >
+                  <Text style={styles.buttonText}>Connect Device</Text>
+                </TouchableOpacity>
 
-                  <Text style={styles.licenseSubtitle}>
-                    Enter your license key to unlock Neural Evidence logs and
-                    Gold themes.
-                  </Text>
-
-                  <TextInput
-                    style={styles.licenseInput}
-                    placeholder="XXXX-XXXX-XXXX-XXXX"
-                    placeholderTextColor={Colors.textMuted}
-                    value={licenseInput}
-                    onChangeText={setLicenseInput}
-                    autoCapitalize="characters"
-                  />
-
-                  <TouchableOpacity
-                    style={styles.activateButton}
-                    onPress={handleActivatePro}
-                    disabled={isActivating}
-                  >
-                    {isActivating ? (
-                      <ActivityIndicator color={Colors.navy} />
-                    ) : (
-                      <Text style={styles.activateButtonText}>VERIFY KEY</Text>
-                    )}
-                  </TouchableOpacity>
-
-                  {/* --- NEW SECTION FOR USERS WITHOUT KEYS --- */}
-                  <View style={styles.buySection}>
-                    <Text style={styles.buyText}>
-                      Don't have a license key?
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() =>
-                        Linking.openURL("https://gfocus.scarlet-technology.com")
-                      }
-                    >
-                      <Text style={styles.buyLink}>
-                        Visit Website to get license key
+                <TouchableOpacity
+                  style={styles.luxuryMemberCard}
+                  onPress={() => setShowLicenseEntry(true)}
+                >
+                  <View style={styles.goldLine} />
+                  <View style={styles.memberCardContent}>
+                    <Ionicons
+                      name="key-outline"
+                      size={20}
+                      color={Colors.gold}
+                    />
+                    <View style={{ marginLeft: 12, flex: 1 }}>
+                      <Text style={styles.memberCardTitle}>PRO MEMBERSHIP</Text>
+                      <Text style={styles.memberCardSub}>
+                        Activate executive license
                       </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color={Colors.gold}
+                    />
+                  </View>
+                </TouchableOpacity>
+              </View>
+
+              {showLicenseEntry && (
+                <View style={styles.licenseOverlay}>
+                  <View style={styles.licenseCard}>
+                    <View style={styles.licenseHeader}>
+                      <Ionicons name="flash" size={24} color={Colors.gold} />
+                      <Text style={styles.licenseTitle}>ACTIVATE PRO</Text>
+                    </View>
+
+                    <Text style={styles.licenseSubtitle}>
+                      Enter your license key to unlock Neural Evidence logs and
+                      Gold themes.
+                    </Text>
+
+                    <TextInput
+                      style={styles.licenseInput}
+                      placeholder="XXXX-XXXX-XXXX-XXXX"
+                      placeholderTextColor={Colors.textMuted}
+                      value={licenseInput}
+                      onChangeText={setLicenseInput}
+                      autoCapitalize="characters"
+                    />
+
+                    <TouchableOpacity
+                      style={styles.activateButton}
+                      onPress={handleActivatePro}
+                      disabled={isActivating}
+                    >
+                      {isActivating ? (
+                        <ActivityIndicator color={Colors.navy} />
+                      ) : (
+                        <Text style={styles.activateButtonText}>
+                          VERIFY KEY
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+
+                    {/* --- NEW SECTION FOR USERS WITHOUT KEYS --- */}
+                    <View style={styles.buySection}>
+                      <Text style={styles.buyText}>
+                        Don't have a license key?
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() =>
+                          Linking.openURL(
+                            "https://gfocus.scarlet-technology.com",
+                          )
+                        }
+                      >
+                        <Text style={styles.buyLink}>
+                          Visit Website to get license key
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.closeLicense}
+                      onPress={() => setShowLicenseEntry(false)}
+                    >
+                      <Text style={styles.closeLicenseText}>CANCEL</Text>
                     </TouchableOpacity>
                   </View>
-
-                  <TouchableOpacity
-                    style={styles.closeLicense}
-                    onPress={() => setShowLicenseEntry(false)}
-                  >
-                    <Text style={styles.closeLicenseText}>CANCEL</Text>
-                  </TouchableOpacity>
                 </View>
-              </View>
-            )}
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </TouchableWithoutFeedback>
+              )}
+            </KeyboardAvoidingView>
+          </SafeAreaView>
+        </TouchableWithoutFeedback>
+      </View>
     );
   }
 
@@ -470,12 +585,6 @@ export default function App() {
               <Text style={styles.proWelcome}>Fleet Control</Text>
               <Text style={styles.proLicenseType}>LIFETIME PRO MEMBER</Text>
             </View>
-            <TouchableOpacity
-              onPress={() => setIsPaired(false)}
-              style={styles.goldBadge}
-            >
-              <Ionicons name="log-out" size={20} color={Colors.navy} />
-            </TouchableOpacity>
           </View>
 
           <View style={styles.proSection}>
@@ -527,11 +636,20 @@ export default function App() {
             <View style={styles.proServiceGrid}>
               {["Analytics", "Cloud Sync", "Guard Plus", "Zen Mode"].map(
                 (s, i) => (
-                  <View key={i} style={styles.serviceItem}>
+                  <TouchableOpacity
+                    key={i}
+                    style={styles.serviceItem}
+                    onPress={() =>
+                      Alert.alert(
+                        "Feature Locked",
+                        "This feature is coming soon to your Pro Dashboard.",
+                      )
+                    }
+                  >
                     <Ionicons name="sparkles" size={24} color={Colors.gold} />
                     <Text style={styles.serviceLabel}>{s}</Text>
-                  </View>
-                )
+                  </TouchableOpacity>
+                ),
               )}
             </View>
           </View>
@@ -568,62 +686,12 @@ export default function App() {
     );
   }
 
-  const OnboardingGuide = () => (
-    <View style={styles.guideOverlay}>
-      <View style={styles.guideCard}>
-        <Ionicons
-          name="rocket"
-          size={50}
-          color={Colors.accent}
-          style={{ alignSelf: "center" }}
-        />
-        <Text style={styles.guideHeader}>GETTING STARTED</Text>
-
-        <View style={styles.stepItem}>
-          <View style={styles.stepBadge}>
-            <Text style={styles.stepNumber}>1</Text>
-          </View>
-          <Text style={styles.stepText}>
-            Visit{" "}
-            <Text style={{ color: Colors.accent }}>
-              gfocus.scarlet-technology.com
-            </Text>
-          </Text>
-        </View>
-
-        <View style={styles.stepItem}>
-          <View style={styles.stepBadge}>
-            <Text style={styles.stepNumber}>2</Text>
-          </View>
-          <Text style={styles.stepText}>
-            Download & install the GFOCUS Engine (Windows or Mac).
-          </Text>
-        </View>
-
-        <View style={styles.stepItem}>
-          <View style={styles.stepBadge}>
-            <Text style={styles.stepNumber}>3</Text>
-          </View>
-          <Text style={styles.stepText}>
-            Enter the 6-digit room code generated by your desktop app here.
-          </Text>
-        </View>
-
-        <TouchableOpacity style={styles.guideButton} onPress={completeGuide}>
-          <Text style={styles.guideButtonText}>I'M READY</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
   // 3. Monitor View (Used by both Pro and Free)
   return (
     <SafeAreaView
       style={[styles.container, isPro && { backgroundColor: Colors.navy }]}
     >
       <StatusBar barStyle="light-content" />
-
-      {showGuide && <OnboardingGuide />}
 
       <View style={styles.mainHeader}>
         <TouchableOpacity
@@ -688,7 +756,9 @@ export default function App() {
           >
             {formatTime(seconds)}
           </Text>
-          <Text style={styles.timerLabel}>Current Session</Text>
+          <Text style={styles.timerLabel}>
+            {isPro ? "Executive Session" : `Free Session (Limit: 60m)`}
+          </Text>
         </View>
       </View>
 
