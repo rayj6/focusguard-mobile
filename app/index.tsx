@@ -289,47 +289,47 @@ export default function App() {
   const handleActivatePro = async () => {
     if (!licenseInput.trim()) return;
 
-    setIsActivating(true);
-    Vibration.vibrate(50);
+    // setIsActivating(true);
+    // Vibration.vibrate(50);
 
-    setIsPro(true);
-    setShowLicenseEntry(false);
-    setIsPaired(true);
+    // setIsPro(true);
+    // setShowLicenseEntry(false);
+    // setIsPaired(true);
 
-    // try {
-    //   const response = await fetch(`${SERVER_URL}/verify_license`, {
-    //     method: "POST",
-    //     headers: { "Content-Type": "application/json" },
-    //     body: JSON.stringify({ license_key: licenseInput.trim() }),
-    //   });
+    try {
+      const response = await fetch(`${SERVER_URL}/verify_license`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ license_key: licenseInput.trim() }),
+      });
 
-    //   const data = await response.json();
+      const data = await response.json();
 
-    //   if (response.ok && data.valid) {
-    //     // 1. Persist the key locally so it survives app restarts
-    //     await AsyncStorage.setItem(LICENSE_STORAGE_KEY, licenseInput.trim());
+      if (response.ok && data.valid) {
+        // 1. Persist the key locally so it survives app restarts
+        await AsyncStorage.setItem(LICENSE_STORAGE_KEY, licenseInput.trim());
 
-    //     // 2. Update state
-    //     setIsPro(true);
-    //     setShowLicenseEntry(false);
-    //     setIsPaired(true); // Auto-pair if they just activated
+        // 2. Update state
+        setIsPro(true);
+        setShowLicenseEntry(false);
+        setIsPaired(true); // Auto-pair if they just activated
 
-    //     Vibration.vibrate([0, 100, 50, 100]);
-    //     Alert.alert("Success", `Pro Activated: ${data.tier} Tier`);
-    //   } else {
-    //     Alert.alert(
-    //       "Invalid License",
-    //       "The license key provided is incorrect or unpaid."
-    //     );
-    //   }
-    // } catch (error) {
-    //   Alert.alert(
-    //     "Connection Error",
-    //     "Could not reach the verification server."
-    //   );
-    // } finally {
-    //   setIsActivating(false);
-    // }
+        Vibration.vibrate([0, 100, 50, 100]);
+        Alert.alert("Success", `Pro Activated: ${data.tier} Tier`);
+      } else {
+        Alert.alert(
+          "Invalid License",
+          "The license key provided is incorrect or unpaid.",
+        );
+      }
+    } catch (error) {
+      Alert.alert(
+        "Connection Error",
+        "Could not reach the verification server.",
+      );
+    } finally {
+      setIsActivating(false);
+    }
   };
 
   const registerDevice = () => {
