@@ -60,14 +60,13 @@ export default function App() {
   const [viewMode, setViewMode] = useState<"DASHBOARD" | "MONITOR">(
     "DASHBOARD",
   );
-  const [devices, setDevices] = useState([
-    { id: "1", code: "S503V6", name: "Executive PC" },
-    { id: "2", code: "Z1XS4J", name: "Travel MacBook" },
-  ]);
+  const [devices, setDevices] = useState<any[]>([]);
+
+  const [isLoading, setIsLoading] = useState(true);
 
   const [showGuide, setShowGuide] = useState(false);
   const ONBOARDING_KEY = "@GFOCUS_GUIDE_SEEN";
-
+  const FLEET_STORAGE_KEY = "@GFOCUS_FLEET_DEVICES";
   const LICENSE_STORAGE_KEY = "@GFOCUS_LICENSE_KEY";
 
   // --- Logic Refs ---
@@ -249,32 +248,38 @@ export default function App() {
   }, [isPaired, code]);
 
   useEffect(() => {
-    const checkStoredLicense = async () => {
+    const initializeApp = async () => {
       try {
+        const savedFleet = await AsyncStorage.getItem(FLEET_STORAGE_KEY);
+        if (savedFleet) {
+          setDevices(JSON.parse(savedFleet));
+        }
+        // 1. Check for stored license
         const storedKey = await AsyncStorage.getItem(LICENSE_STORAGE_KEY);
         if (storedKey) {
-          // Optional: Re-verify with server to ensure it wasn't revoked
           const response = await fetch(`${SERVER_URL}/verify_license`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ license_key: storedKey }),
+            body: JSON.stringify({ license_key: storedKey.trim() }),
           });
 
           const data = await response.json();
           if (response.ok && data.valid) {
             setIsPro(true);
             setLicenseInput(storedKey);
+            setIsPaired(true); // Automatically set paired if they are Pro
           } else {
-            // If key is no longer valid, remove it
             await AsyncStorage.removeItem(LICENSE_STORAGE_KEY);
           }
         }
       } catch (e) {
         console.error("Failed to restore license", e);
+      } finally {
+        setIsLoading(false); // Finish loading regardless of result
       }
     };
 
-    checkStoredLicense();
+    initializeApp();
   }, []);
 
   // --- Handlers ---
@@ -332,18 +337,25 @@ export default function App() {
     }
   };
 
-  const registerDevice = () => {
+  const registerDevice = async () => {
     if (newDeviceCode.length < 6)
       return Alert.alert(
-        "Invalid Code",
+        "Error",
         "Please enter a valid 6-character room code.",
       );
+
     const newDevice = {
-      id: Math.random().toString(),
+      id: Date.now().toString(), // Use timestamp for unique ID
       code: newDeviceCode.toUpperCase(),
       name: `Device ${devices.length + 1}`,
     };
-    setDevices([...devices, newDevice]);
+
+    const updatedFleet = [...devices, newDevice];
+    setDevices(updatedFleet);
+
+    // Save to disk
+    await AsyncStorage.setItem(FLEET_STORAGE_KEY, JSON.stringify(updatedFleet));
+
     setNewDeviceCode("");
     setShowRegisterDevice(false);
     Vibration.vibrate(10);
@@ -433,12 +445,24 @@ export default function App() {
       </View>
     </View>
   );
+
+  if (isLoading) {
+    return (
+      <View
+        style={[
+          styles.container,
+          { justifyContent: "center", alignItems: "center" },
+        ]}
+      >
+        <ActivityIndicator size="large" color={Colors.gold} />
+      </View>
+    );
+  }
   // 1. Initial Pairing
   if (!isPaired) {
     return (
       <View style={{ flex: 1 }}>
         {showGuide && <OnboardingGuide />}
-
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <SafeAreaView style={styles.container}>
             <StatusBar barStyle="light-content" />
@@ -589,38 +613,57 @@ export default function App() {
 
           <View style={styles.proSection}>
             <Text style={styles.proSectionTitle}>Active Fleet</Text>
-            {devices.map((dev) => (
-              <TouchableOpacity
-                key={dev.id}
-                style={[
-                  styles.deviceCardPro,
-                  code === dev.code && { borderColor: Colors.gold },
-                ]}
-                onPress={() => selectDevice(dev.code)}
-              >
-                <View style={styles.deviceInfo}>
-                  <Ionicons
-                    name="desktop-outline"
-                    size={24}
-                    color={Colors.gold}
-                  />
-                  <View style={{ marginLeft: 15, flex: 1 }}>
-                    <TextInput
-                      style={styles.deviceNameInput}
-                      value={dev.name}
-                      onChangeText={(val) => updateDeviceName(dev.id, val)}
-                      placeholderTextColor={Colors.gold + "50"}
-                    />
-                    <Text style={styles.deviceCodePro}>{dev.code}</Text>
-                  </View>
-                </View>
+
+            {devices.length === 0 ? (
+              /* EMPTY STATE DISPLAY */
+              <View style={styles.emptyFleetCard}>
                 <Ionicons
-                  name="chevron-forward"
-                  size={20}
-                  color={Colors.gold + "50"}
+                  name="shield-outline"
+                  size={40}
+                  color={Colors.gold + "40"}
                 />
-              </TouchableOpacity>
-            ))}
+                <Text style={styles.emptyFleetText}>
+                  No devices connected to this license.
+                </Text>
+                <Text style={styles.emptyFleetSub}>
+                  Register your first device below to start monitoring.
+                </Text>
+              </View>
+            ) : (
+              /* RENDER DEVICES */
+              devices.map((dev) => (
+                <TouchableOpacity
+                  key={dev.id}
+                  style={[
+                    styles.deviceCardPro,
+                    code === dev.code && { borderColor: Colors.gold },
+                  ]}
+                  onPress={() => selectDevice(dev.code)}
+                >
+                  <View style={styles.deviceInfo}>
+                    <Ionicons
+                      name="desktop-outline"
+                      size={24}
+                      color={Colors.gold}
+                    />
+                    <View style={{ marginLeft: 15, flex: 1 }}>
+                      <TextInput
+                        style={styles.deviceNameInput}
+                        value={dev.name}
+                        onChangeText={(val) => updateDeviceName(dev.id, val)}
+                        placeholderTextColor={Colors.gold + "50"}
+                      />
+                      <Text style={styles.deviceCodePro}>{dev.code}</Text>
+                    </View>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={20}
+                    color={Colors.gold + "50"}
+                  />
+                </TouchableOpacity>
+              ))
+            )}
 
             <TouchableOpacity
               style={styles.addDeviceBtn}
@@ -1302,5 +1345,28 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontSize: 12,
     fontWeight: "bold",
+  },
+  emptyFleetCard: {
+    backgroundColor: Colors.surfacePro,
+    borderRadius: 16,
+    padding: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: Colors.gold + "20",
+    borderStyle: "dashed",
+    marginBottom: 20,
+  },
+  emptyFleetText: {
+    color: Colors.goldLight,
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 15,
+  },
+  emptyFleetSub: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    textAlign: "center",
+    marginTop: 5,
   },
 });
