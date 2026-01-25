@@ -505,23 +505,15 @@ export default function App() {
                   onPress={() => setShowLicenseEntry(true)}
                 >
                   <View style={styles.goldLine} />
-                  <View style={styles.memberCardContent}>
-                    <Ionicons
-                      name="key-outline"
-                      size={20}
-                      color={Colors.gold}
-                    />
-                    <View style={{ marginLeft: 12, flex: 1 }}>
-                      <Text style={styles.memberCardTitle}>PRO MEMBERSHIP</Text>
-                      <Text style={styles.memberCardSub}>
-                        Activate executive license
+                  <View style={{ marginTop: 'auto', paddingTop: 20, alignItems: 'center' }}>
+                    <TouchableOpacity
+                      style={styles.loginLinkContainer}
+                      onPress={() => setShowLicenseEntry(true)}
+                    >
+                      <Text style={styles.loginLinkText}>
+                        Already a Pro Member? <Text style={{ color: Colors.gold, fontWeight: '800' }}>SIGN IN</Text>
                       </Text>
-                    </View>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={18}
-                      color={Colors.gold}
-                    />
+                    </TouchableOpacity>
                   </View>
                 </TouchableOpacity>
               </View>
@@ -530,22 +522,33 @@ export default function App() {
                 <View style={styles.licenseOverlay}>
                   <View style={styles.licenseCard}>
                     <View style={styles.licenseHeader}>
-                      <Ionicons name="flash" size={24} color={Colors.gold} />
-                      <Text style={styles.licenseTitle}>ACTIVATE PRO</Text>
+                      <Ionicons name="person-circle-outline" size={24} color={Colors.gold} />
+                      <Text style={styles.licenseTitle}>MEMBER LOGIN</Text>
                     </View>
 
                     <Text style={styles.licenseSubtitle}>
-                      Enter your license key to unlock Neural Evidence logs and
-                      Gold themes.
+                      Sign in with your GFocus account credentials to sync your Pro status across devices.
                     </Text>
 
+                    {/* Email Field */}
                     <TextInput
                       style={styles.licenseInput}
-                      placeholder="XXXX-XXXX-XXXX-XXXX"
+                      placeholder="Email Address"
+                      placeholderTextColor={Colors.textMuted}
+                      // Using a local state or just placeholder for email since you didn't provide an email state
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                    />
+
+                    {/* Password Field (Mapped to licenseInput) */}
+                    <TextInput
+                      style={styles.licenseInput}
+                      placeholder="Password"
                       placeholderTextColor={Colors.textMuted}
                       value={licenseInput}
                       onChangeText={setLicenseInput}
                       autoCapitalize="characters"
+                      secureTextEntry={true} // Masks the license key as dots
                     />
 
                     <TouchableOpacity
@@ -556,27 +559,17 @@ export default function App() {
                       {isActivating ? (
                         <ActivityIndicator color={Colors.navy} />
                       ) : (
-                        <Text style={styles.activateButtonText}>
-                          VERIFY KEY
-                        </Text>
+                        <Text style={styles.activateButtonText}>SIGN IN</Text>
                       )}
                     </TouchableOpacity>
 
-                    {/* --- NEW SECTION FOR USERS WITHOUT KEYS --- */}
                     <View style={styles.buySection}>
-                      <Text style={styles.buyText}>
-                        Don't have a license key?
-                      </Text>
                       <TouchableOpacity
                         onPress={() =>
-                          Linking.openURL(
-                            "https://gfocus.scarlet-technology.com",
-                          )
+                          Linking.openURL("https://gfocus.scarlet-technology.com")
                         }
                       >
-                        <Text style={styles.buyLink}>
-                          Visit Website to get license key
-                        </Text>
+                        <Text style={styles.buyLink}>Forgot Password?</Text>
                       </TouchableOpacity>
                     </View>
 
@@ -584,7 +577,7 @@ export default function App() {
                       style={styles.closeLicense}
                       onPress={() => setShowLicenseEntry(false)}
                     >
-                      <Text style={styles.closeLicenseText}>CANCEL</Text>
+                      <Text style={styles.closeLicenseText}>BACK</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -904,7 +897,7 @@ const styles = StyleSheet.create({
   buttonText: { color: "#fff", fontSize: 18, fontWeight: "700" },
 
   luxuryMemberCard: {
-    marginTop: 30,
+    marginTop: 100,
     backgroundColor: Colors.surface,
     borderRadius: 16,
     overflow: "hidden",
@@ -1276,24 +1269,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.gold + "40",
   },
-  licenseHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginBottom: 10,
-  },
-  licenseTitle: {
-    color: Colors.gold,
-    fontSize: 20,
-    fontWeight: "900",
-    letterSpacing: 1,
-  },
-  licenseSubtitle: {
-    color: Colors.textMuted,
-    fontSize: 14,
-    marginBottom: 20,
-    lineHeight: 20,
-  },
   licenseInput: {
     backgroundColor: Colors.background,
     borderRadius: 12,
@@ -1368,5 +1343,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: "center",
     marginTop: 5,
+  },
+  // Add these to your styles object
+  loginLinkContainer: {
+    paddingVertical: 15,
+    width: '100%',
+    alignItems: 'center',
+  },
+  loginLinkText: {
+    color: Colors.textMuted,
+    fontSize: 14,
+  },
+  // Update/Overwrite these existing styles
+  licenseHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 15,
+    justifyContent: 'center',
+  },
+  licenseTitle: {
+    color: Colors.gold,
+    fontSize: 20,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  licenseSubtitle: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    marginBottom: 20,
+    lineHeight: 18,
+    textAlign: 'center',
   },
 });
