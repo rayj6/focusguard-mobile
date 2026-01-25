@@ -380,6 +380,34 @@ export default function App() {
     return `${pad(h)}:${pad(m)}:${pad(s)}`;
   };
 
+  const handleLogout = () => {
+    Alert.alert(
+      "Delete Account",
+      "Are you sure you want to delete your account?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Yes",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // 1. Remove the license key from storage
+              await AsyncStorage.removeItem(LICENSE_STORAGE_KEY);
+              
+              // 2. Reset state to return to the login/pairing screen
+              setIsPro(false);
+              setIsPaired(false);
+              
+              Vibration.vibrate(50);
+            } catch (e) {
+              console.error("Logout Error:", e);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   useEffect(() => {
     let ticker: any;
 
@@ -602,6 +630,13 @@ export default function App() {
               <Text style={styles.proWelcome}>Fleet Control</Text>
               <Text style={styles.proLicenseType}>LIFETIME PRO MEMBER</Text>
             </View>
+            <TouchableOpacity 
+              style={styles.logoutBtn} 
+              onPress={handleLogout}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="power-outline" size={26} color={Colors.danger} />
+            </TouchableOpacity>
           </View>
 
           <View style={styles.proSection}>
@@ -1374,5 +1409,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     lineHeight: 18,
     textAlign: 'center',
+  },
+
+  logoutBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.danger + "15", // Subtle red background
+    justifyContent: "center",
+    alignItems: "center",
   },
 });
