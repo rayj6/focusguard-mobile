@@ -8,13 +8,13 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_SERVER_URL": "https://focusai-18m3.onrender.com"
+        "EXPO_PUBLIC_SERVER_URL": "https://gfocusapi.scarlet-technology.com"
       }
     },
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_SERVER_URL": "https://focusai-18m3.onrender.com"
+        "EXPO_PUBLIC_SERVER_URL": "https://gfocusapi.scarlet-technology.com"
       }
     },
     "production": {
