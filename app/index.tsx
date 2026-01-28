@@ -127,6 +127,7 @@ export default function App() {
 
   // 3. Save to Room-Specific Storage
   const saveDistraction = async (data: any, roomCode: string) => {
+    if (!SERVER_URL?.trim()) return;
     try {
       const liveUrl = `${SERVER_URL}/proofs/proof_${roomCode}.jpg?t=${Date.now()}`;
       const base64Data = await getBase64(liveUrl);
@@ -177,8 +178,12 @@ export default function App() {
 
   // 4. Monitoring Loop
   useEffect(() => {
-    // Only run if paired and we have a code
+    // Only run if paired, we have a code, and server URL is configured
     if (!isPaired || !code) return;
+    if (!SERVER_URL?.trim()) {
+      console.error("SERVER_URL (EXPO_PUBLIC_SERVER_URL) is not set — status/proofs will not sync.");
+      return;
+    }
 
     const interval = window.setInterval(async () => {
       try {
@@ -187,17 +192,29 @@ export default function App() {
         // If the server returns an error (404, 500, etc.)
         if (!res.ok) throw new Error("Server Offline");
 
-        const data = await res.json();
+        const data = (await res.json().catch(() => ({}))) as {
+          status?: string;
+          seconds?: number;
+          session_id?: number;
+          reason?: string;
+          image_url?: string | null;
+        };
 
-        // Update the status (IDLE, FOCUSING, or DISTRACTED)
-        setStatus(data.status);
+        // Update the status (IDLE, FOCUSING, or DISTRACTED); default IDLE if parse failed
+        const statusVal = data.status === "FOCUSING" || data.status === "DISTRACTED" ? data.status : "IDLE";
+        setStatus(statusVal);
+
+        // Sync seconds from server so clock and "start" match desktop
+        const serverSeconds = typeof data.seconds === "number" ? data.seconds : 0;
+        setSeconds(serverSeconds);
 
         if (
-          data.status === "IDLE" &&
+          statusVal === "IDLE" &&
           (status === "FOCUSING" || status === "DISTRACTED")
         ) {
           // 1. Stop the clock by updating status
           setStatus("IDLE");
+          setSeconds(0);
 
           // 2. Save this session to history before it's lost
           if (seconds > 5) {
@@ -217,16 +234,16 @@ export default function App() {
               JSON.stringify(updatedHistory),
             );
           }
-          return; // Exit early so we don't sync seconds back to 0
+          return; // Exit early so we don't overwrite seconds again
         }
 
-        // Update Proof Image
+        // Update Proof Image (use full URL from server; server must return public URL when behind tunnel)
         setProofUrl(
           data.image_url ? `${data.image_url}?t=${Date.now()}` : null,
         );
 
         // Distraction saving logic
-        if (data.status === "DISTRACTED") {
+        if (statusVal === "DISTRACTED") {
           distractionCounter.current += 1;
           if (distractionCounter.current >= 5) {
             await saveDistraction(data, code);
@@ -239,6 +256,7 @@ export default function App() {
         // SAFETY: If the network fails or desktop app is closed
         console.log("Monitor Error: Assuming IDLE", e);
         setStatus("IDLE");
+        setSeconds(0);
       }
     }, 2000); // Check server every 2 seconds
 
@@ -252,28 +270,35 @@ export default function App() {
       try {
         const savedFleet = await AsyncStorage.getItem(FLEET_STORAGE_KEY);
         if (savedFleet) {
-          setDevices(JSON.parse(savedFleet));
+          try {
+            setDevices(JSON.parse(savedFleet));
+          } catch {
+            setDevices([]);
+          }
         }
-        // 1. Check for stored license
+        // 1. Check for stored license (skip if server URL not set)
         const storedKey = await AsyncStorage.getItem(LICENSE_STORAGE_KEY);
-        if (storedKey) {
-          const response = await fetch(`${SERVER_URL}/verify_license`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ license_key: storedKey.trim() }),
-          });
-
-          const data = await response.json();
-          if (response.ok && data.valid) {
-            setIsPro(true);
-            setLicenseInput(storedKey);
-            setIsPaired(true); // Automatically set paired if they are Pro
-          } else {
-            await AsyncStorage.removeItem(LICENSE_STORAGE_KEY);
+        if (storedKey && SERVER_URL?.trim()) {
+          try {
+            const response = await fetch(`${SERVER_URL}/verify_license`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ license_key: storedKey.trim() }),
+            });
+            const data = (await response.json().catch(() => ({}))) as { valid?: boolean; tier?: string };
+            if (response.ok && data.valid) {
+              setIsPro(true);
+              setLicenseInput(storedKey);
+              setIsPaired(true); // Automatically set paired if they are Pro
+            } else {
+              await AsyncStorage.removeItem(LICENSE_STORAGE_KEY);
+            }
+          } catch (e) {
+            console.error("Failed to restore license", e);
           }
         }
       } catch (e) {
-        console.error("Failed to restore license", e);
+        console.error("Failed to initialize", e);
       } finally {
         setIsLoading(false); // Finish loading regardless of result
       }
@@ -301,14 +326,17 @@ export default function App() {
     // setShowLicenseEntry(false);
     // setIsPaired(true);
 
+    if (!SERVER_URL?.trim()) {
+      Alert.alert("Configuration Error", "Server URL is not set. Please check app configuration.");
+      return;
+    }
     try {
       const response = await fetch(`${SERVER_URL}/verify_license`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ license_key: licenseInput.trim() }),
       });
-
-      const data = await response.json();
+      const data = (await response.json().catch(() => ({}))) as { valid?: boolean; tier?: string };
 
       if (response.ok && data.valid) {
         // 1. Persist the key locally so it survives app restarts
